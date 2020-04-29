@@ -1,6 +1,8 @@
 # Batch Cropping Tool
 A simple GUI interface to batch auto-crop images. Designed to remove excess borders around images.
 
+![Program](https://applesauce.site/imagehost/batchcroptool.png)
+
 # Install
 Requires Python 3
 1. [Download](https://github.com/mpsparrow/batch-cropping-tool/releases/latest)
