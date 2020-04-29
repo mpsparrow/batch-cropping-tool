@@ -1,11 +1,25 @@
+'''
+Batch Cropping Tool
+Coded by Matthew S
+April 2020
+'''
+
 import wx
 import os
+import sys
 from PIL import Image, ImageChops
 import time
 from threading import *
 
+class RedirectText(object):
+    def __init__(self,aWxTextCtrl):
+        self.out = aWxTextCtrl
+
+    def write(self,string):
+        self.out.WriteText(string)
+
 class Crop(Thread):
-    def __init__(self, inputDir, outputDir, subDir, double, bottom, outer, other):
+    def __init__(self, inputDir, outputDir, subDir, double, bottom, outer, offset, other):
         Thread.__init__(self)
         self.inputDir = inputDir
         self.outputDir = outputDir
@@ -13,6 +27,7 @@ class Crop(Thread):
         self.doubleCrop = double
         self.bottomCrop = bottom
         self.outerCrop = outer
+        self.offset = offset
         self.mainframe = other
         self._want_abort = False
         self.start()
@@ -20,7 +35,7 @@ class Crop(Thread):
     def trim(self, im):
         bg = Image.new(im.mode, im.size, im.getpixel((0,0)))
         diff = ImageChops.difference(im, bg)
-        diff = ImageChops.add(diff, diff, 2.0, -100)
+        diff = ImageChops.add(diff, diff, 2.0, self.offset * (-1))
         bbox = diff.getbbox()
         if bbox:
             return im.crop(bbox)
@@ -29,14 +44,11 @@ class Crop(Thread):
         try:
             startTime = time.time()
 
-            print("== Setup ==")
-
             # makes output folder if it doesn't exist
             try:
                 os.mkdir(self.outputDir)
-                print("Output Directory Created:", self.outputDir, "\n")
             except:
-                print("Output Directory Already Exists:", self.outputDir, "\n")
+                pass
 
             if self.subDir:
                 arr = []
@@ -52,8 +64,9 @@ class Crop(Thread):
             # removes folders from listdir
             print(arr)
             newArr = []
+            fileTypes = [".jpg", ".jpeg", ".png"]
             for item in arr:
-                if "." in item:
+                if any(ext in item for ext in fileTypes):
                     newArr.append(item)
             arr = newArr
 
@@ -75,11 +88,11 @@ class Crop(Thread):
                 bg = Image.open(imgPath) # The image to be cropped
                 width, height = bg.size 
 
-                if self.bottomCrop:
-                    bg = bg.crop((0, 0, width, height-1))
+                if self.bottomCrop != 0:
+                    bg = bg.crop((0, 0, width, height-self.bottomCrop))
 
-                if self.outerCrop:
-                    bg = bg.crop((1, 1, width-1, height-1))
+                if self.outerCrop != 0:
+                    bg = bg.crop((self.outerCrop, self.outerCrop, width-self.outerCrop, height-self.outerCrop))
 
                 while x < 2:
                     x += 1
@@ -98,20 +111,18 @@ class Crop(Thread):
                 except:
                     bg = Image.open(imgPath)
                     bg.save(os.path.join(self.outputDir, itr))
-                print(imgPath, " Time:", int((time.time() - cropTime)*1000), "ms")
-                self.mainframe.updateProgress(counter, totalImages)
+                print(imgPath, "|", int((time.time() - cropTime)*1000), "ms")
+                self.mainframe.updateProgress(counter, totalImages, startTime)
 
                 if self._want_abort:
-                    print("== Aborted ==")
                     self.mainframe.result(self, "Aborted")
                     return
 
-            print("\n== Done ==")
             secondTime = round((time.time() - startTime), 2)
             self.mainframe.result(self, f"Completed | Time: {secondTime}s | Image(s): {counter}")
         except:
-            print("\n== Failed ==")
             self.mainframe.worker = None
+            self.mainframe.result(self, "Failed")
             return
 
     def abort(self):
@@ -135,15 +146,26 @@ class ExampleFrame(wx.Frame):
         self.outputButton = wx.Button(self.panel, label="Browse")
         self.outputButton.Bind(wx.EVT_BUTTON, self.outputFolder)
 
+        self.bottomCropLabel = wx.StaticText(self.panel, label="Crop Bottom By")
+        self.bottomCrop = wx.SpinCtrl(self.panel)
+        self.bottomCrop.SetValue(0)
+        self.outerCropLabel = wx.StaticText(self.panel, label="Crop All Sides By")
+        self.outerCrop = wx.SpinCtrl(self.panel)
+        self.outerCrop.SetValue(0)
         self.subDir = wx.CheckBox(self.panel, label="Include Sub-Directories")
         self.doubleCrop = wx.CheckBox(self.panel, label="Double Crop")
-        self.bottomCrop = wx.CheckBox(self.panel, label="Crop Bottom by 1")
-        self.outerCrop = wx.CheckBox(self.panel, label="Crop All Sides by 1")
+        self.offsetLabel = wx.StaticText(self.panel, label="Cropping Offset (tolerance)")
+        self.offset = wx.SpinCtrl(self.panel)
+        self.offset.SetValue(50)
 
         self.runBatch = wx.Button(self.panel, label="Run Batch")
         self.runBatch.Bind(wx.EVT_BUTTON, self.run)
         self.abortBatch = wx.Button(self.panel, label="Abort")
         self.abortBatch.Bind(wx.EVT_BUTTON, self.abort)
+
+        self.log = wx.TextCtrl(self.panel, size=(300, 150), style=wx.TE_MULTILINE|wx.TE_READONLY)
+        redir = RedirectText(self.log)
+        sys.stdout = redir
 
         self.status = wx.StaticText(self.panel)
 
@@ -154,7 +176,7 @@ class ExampleFrame(wx.Frame):
         self.windowSizer.Add(self.panel, 1, wx.ALL | wx.EXPAND)        
 
         # Set sizer for the panel content
-        self.sizer = wx.GridBagSizer(5, 10)
+        self.sizer = wx.GridBagSizer(7, 10)
         self.sizer.Add(self.inputLabel, (0, 0), flag=wx.LEFT|wx.TOP, border=10)
         self.sizer.Add(self.inputField, (0, 1), (1, 8), flag=wx.TOP|wx.EXPAND, border=5)
         self.sizer.Add(self.inputButton, (0, 9), flag=wx.TOP|wx.RIGHT, border=5)
@@ -163,16 +185,21 @@ class ExampleFrame(wx.Frame):
         self.sizer.Add(self.outputField, (1, 1), (1, 8), flag=wx.TOP|wx.EXPAND, border=5)
         self.sizer.Add(self.outputButton, (1, 9), flag=wx.TOP|wx.RIGHT, border=5)
 
-        self.sizer.Add(self.subDir, (2, 1))
-        self.sizer.Add(self.doubleCrop, (2, 3))
-        self.sizer.Add(self.bottomCrop, (3, 1))
-        self.sizer.Add(self.outerCrop, (3, 3))
+        self.sizer.Add(self.bottomCropLabel, (2, 1))
+        self.sizer.Add(self.bottomCrop, (2, 2))
+        self.sizer.Add(self.subDir, (2, 4))
+        self.sizer.Add(self.outerCropLabel, (3, 1))
+        self.sizer.Add(self.outerCrop, (3, 2))
+        self.sizer.Add(self.doubleCrop, (3, 4))
+        self.sizer.Add(self.offsetLabel, (4, 1))
+        self.sizer.Add(self.offset, (4, 2))
 
-        self.sizer.Add(self.status, (4, 0), (1, 7), flag=wx.TOP|wx.EXPAND, border=5)
-        self.sizer.Add(self.runBatch, (4, 8), border=5)
-        self.sizer.Add(self.abortBatch, (4, 9), border=5)
+        self.sizer.Add(self.status, (5, 0), (1, 7), flag=wx.TOP|wx.EXPAND, border=5)
+        self.sizer.Add(self.runBatch, (5, 8), border=5)
+        self.sizer.Add(self.abortBatch, (5, 9), border=5)
 
-        self.sizer.Add(self.progress, (5, 0), (1, 10), flag=wx.ALL | wx.EXPAND)
+        self.sizer.Add(self.progress, (6, 0), (1, 10), flag=wx.ALL | wx.EXPAND)
+        self.sizer.Add(self.log, (7, 0), (1, 10), flag=wx.ALL | wx.EXPAND)
 
         # Set simple sizer for a nice border
         self.border = wx.BoxSizer()
@@ -188,7 +215,7 @@ class ExampleFrame(wx.Frame):
         if not self.worker:
             self.progress.SetValue(0)
             self.status.SetLabel("Running...")
-            self.worker = Crop(self.inputField.GetValue(), self.outputField.GetValue(), self.subDir.GetValue(), self.doubleCrop.GetValue(), self.bottomCrop.GetValue(), self.outerCrop.GetValue(), self)
+            self.worker = Crop(self.inputField.GetValue(), self.outputField.GetValue(), self.subDir.GetValue(), self.doubleCrop.GetValue(), self.bottomCrop.GetValue(), self.outerCrop.GetValue(), self.offset.GetValue(), self)
 
     def abort(self, event):
         if self.worker:
@@ -200,8 +227,10 @@ class ExampleFrame(wx.Frame):
         self.status.SetLabel(message)
         self.worker = None
 
-    def updateProgress(self, cur, final):
+    def updateProgress(self, cur, final, timeElapsed):
         x = int((cur/final)*25)
+        timeE = round(time.time() - timeElapsed, 2)
+        self.status.SetLabel(f"{cur}/{final} | {int((cur/final)*100)}% | Time Elapsed: {int(timeE)}s | Est. Time Left: {int((timeE/cur)*(final - cur))}s")
         self.progress.SetValue(x)
 
     def inputFolder(self, event):
